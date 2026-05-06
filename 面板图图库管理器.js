@@ -138,7 +138,6 @@ export class ProfileImageManager extends plugin {
     const version = this.getLocalVersion()
 
     let msg = '[面板图图库管理器]\n'
-    msg += `路径：${GALLERY_PATH}\n`
     msg += `角色数：${charCount}\n`
     msg += `总大小：${this.formatSize(totalSize)}\n`
     if (version) {
