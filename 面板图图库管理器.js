@@ -6,6 +6,7 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 
 const GALLERY_PATH = path.join(process.cwd(), 'plugins/miao-plugin/resources/profile/normal-character')
+const GIT_WORK_DIR = path.join(process.cwd(), 'plugins/miao-plugin/resources/profile')
 
 export class ProfileImageManager extends plugin {
   constructor() {
@@ -32,7 +33,7 @@ export class ProfileImageManager extends plugin {
 
   gitExec(command, timeout = 10000) {
     return execSync(command, {
-      cwd: GALLERY_PATH,
+      cwd: GIT_WORK_DIR,
       encoding: 'utf8',
       timeout
     }).trim()
@@ -42,8 +43,8 @@ export class ProfileImageManager extends plugin {
     if (!fs.existsSync(GALLERY_PATH)) {
       return { ok: false, msg: '[面板图图库管理器] 图库目录不存在，请先安装图库' }
     }
-    if (!fs.existsSync(path.join(GALLERY_PATH, '.git'))) {
-      return { ok: false, msg: '[面板图图库管理器] 图库目录存在但未初始化 Git，请重新安装图库' }
+    if (!fs.existsSync(path.join(GIT_WORK_DIR, '.git'))) {  // 检查 profile 目录下的 .git
+      return { ok: false, msg: '[面板图图库管理器] 图库未初始化 Git，请重新安装图库' }
     }
     return { ok: true }
   }
@@ -111,20 +112,19 @@ export class ProfileImageManager extends plugin {
       const localSha = this.gitExec('git rev-parse --short HEAD')
       if (remoteSha === localSha) return
 
-      // 先尝试正常 git pull
       try {
         this.gitExec('git pull origin main --allow-unrelated-histories', 30000)
-        const msg = `[面板图图库管理器] 自动更新成功\n${localSha} -> ${remoteSha}`
+        const msg = '[面板图图库管理器] 自动更新成功\n' + localSha + ' -> ' + remoteSha
         this.notifyMaster(msg)
-        logger.info(`[面板图图库管理器] 自动更新成功: ${localSha} -> ${remoteSha}`)
+        logger.info('[面板图图库管理器] 自动更新成功: ' + localSha + ' -> ' + remoteSha)
       } catch (pullErr) {
         const errorMsg = pullErr.stderr || pullErr.stdout || pullErr.message || '未知错误'
-        const msg = `[面板图图库管理器] 自动更新失败\n检测到新版本 ${remoteSha}\n错误信息：${errorMsg}\n请手动执行 #强制更新图库`
+        const msg = '[面板图图库管理器] 自动更新失败\n检测到新版本 ' + remoteSha + '\n错误信息：' + errorMsg + '\n请手动执行 #强制更新图库'
         this.notifyMaster(msg)
-        logger.error(`[面板图图库管理器] 自动更新失败:`, pullErr)
+        logger.error('[面板图图库管理器] 自动更新失败:', pullErr)
       }
     } catch (err) {
-      logger.error(`[面板图图库管理器] 自动检查更新失败:`, err)
+      logger.error('[面板图图库管理器] 自动检查更新失败:', err)
     }
   }
 
@@ -138,11 +138,11 @@ export class ProfileImageManager extends plugin {
     const version = this.getLocalVersion()
 
     let msg = '[面板图图库管理器]\n'
-    msg += `角色数：${charCount}\n`
-    msg += `总大小：${this.formatSize(totalSize)}\n`
+    msg += '角色数：' + charCount + '\n'
+    msg += '总大小：' + this.formatSize(totalSize) + '\n'
     if (version) {
-      msg += `版本：${version.sha}\n`
-      msg += `时间：${version.date}\n`
+      msg += '版本：' + version.sha + '\n'
+      msg += '时间：' + version.date + '\n'
     } else {
       msg += '无法获取版本信息\n'
     }
@@ -156,11 +156,11 @@ export class ProfileImageManager extends plugin {
     try {
       const result = this.gitExec('git pull', 30000)
       const output = result || 'Already up to date.'
-      return e.reply(`[面板图图库管理器] 图库更新成功\n${output}`)
+      return e.reply('[面板图图库管理器] 图库更新成功\n' + output)
     } catch (err) {
       const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
       let msg = '[面板图图库管理器] 图库自动更新失败，请尝试使用 #强制更新图库\n'
-      msg += `错误信息：${errorMsg}`
+      msg += '错误信息：' + errorMsg
       return e.reply(msg)
     }
   }
@@ -175,7 +175,7 @@ export class ProfileImageManager extends plugin {
       return e.reply('[面板图图库管理器] 强制更新成功')
     } catch (err) {
       const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
-      return e.reply(`[面板图图库管理器] 强制更新失败\n${errorMsg}\n请检查网络或手动执行安装命令`)
+      return e.reply('[面板图图库管理器] 强制更新失败\n' + errorMsg + '\n请检查网络或手动执行安装命令')
     }
   }
 }
