@@ -8,13 +8,8 @@ import { execSync } from 'node:child_process'
 const GALLERY_PATH = path.join(process.cwd(), 'plugins/miao-plugin/resources/profile/normal-character')
 const GIT_WORK_DIR = path.join(process.cwd(), 'plugins/miao-plugin/resources/profile')
 const BLOCKED_GIT_DIR = path.join(GALLERY_PATH, '.git')
-
-// 远程仓库地址
 const MAIN_REPO_URL = 'https://github.com/AxiuCN/miao-plugin-ProfileImg.git'
 const BLOCKED_REPO_URL = 'https://github.com/AxiuCN/miao-plugin-ProfileImg-Blocked.git'
-// 国内镜像
-const MAIN_REPO_MIRROR = 'https://ghproxy.com/https://github.com/AxiuCN/miao-plugin-ProfileImg.git'
-const BLOCKED_REPO_MIRROR = 'https://ghproxy.com/https://github.com/AxiuCN/miao-plugin-ProfileImg-Blocked.git'
 
 export class ProfileImageManager extends plugin {
   constructor() {
@@ -23,21 +18,9 @@ export class ProfileImageManager extends plugin {
       dsc: '管理 normal-character 角色面板图库及屏蔽图库',
       event: 'message',
       priority: 500,
-      task: [
-        {
-          name: '主图库自动检查更新',
-          cron: '0 30 6 * * *',
-          fnc: () => this.autoCheck(),
-          log: true
-        },
-        {
-          name: '管理器自身自动更新',
-          cron: '50 5 * * *',
-          fnc: () => this.selfUpdate(),
-          log: false
-        }
-      ],
       rule: [
+        // 图库总览
+        { reg: '^#图库状态$', fnc: 'overallStatus' },
         // 主图库
         { reg: '^#主图库状态$', fnc: 'status' },
         { reg: '^#更新图库$', fnc: 'update', permission: 'master' },
@@ -46,32 +29,38 @@ export class ProfileImageManager extends plugin {
         // 屏蔽图库
         { reg: '^#屏蔽图库状态$', fnc: 'blockedStatus' },
         { reg: '^#下载屏蔽图库$', fnc: 'downloadBlocked', permission: 'master' },
-        // 屏蔽图管理
         { reg: '^#(.+)面板图屏蔽列表$', fnc: 'blockedImgList' },
-        { reg: '^#(.+)面板图屏蔽添加$', fnc: 'blockedImgAdd' },
-        { reg: '^#(.+)面板图屏蔽删除\\s*(.*)$', fnc: 'blockedImgDelete' },
-        // 总览
-        { reg: '^#图库状态$', fnc: 'overallStatus' }
+        // 面板图迁移
+        { reg: '^#屏蔽(.+)面板图\\s*(\\d*)$', fnc: 'blockImg', permission: 'master' },
+        { reg: '^#启用(.+)(屏蔽)?面板图\\s*(\\d*)$', fnc: 'unblockImg', permission: 'master' }
       ]
     })
+
+    // 定时任务
+    this.task = [
+      {
+        name: '主图库自动检查更新',
+        cron: '0 30 6 * * *',
+        fnc: () => this.autoCheck(),
+        log: true
+      },
+      {
+        name: '管理器自身自动更新',
+        cron: '50 5 * * *',
+        fnc: () => this.selfUpdate(),
+        log: false
+      }
+    ]
   }
 
-  // ========== 工具方法 ==========
+  // ==================== 工具方法 ====================
 
   gitExec(command, timeout = 10000) {
-    return execSync(command, {
-      cwd: GIT_WORK_DIR,
-      encoding: 'utf8',
-      timeout
-    }).trim()
+    return execSync(command, { cwd: GIT_WORK_DIR, encoding: 'utf8', timeout }).trim()
   }
 
   gitExecAt(dir, command, timeout = 10000) {
-    return execSync(command, {
-      cwd: dir,
-      encoding: 'utf8',
-      timeout
-    }).trim()
+    return execSync(command, { cwd: dir, encoding: 'utf8', timeout }).trim()
   }
 
   checkGallery() {
@@ -92,10 +81,6 @@ export class ProfileImageManager extends plugin {
       return { ok: false, msg: '[面板图图库管理器] 屏蔽图库未初始化 Git，请先安装屏蔽图库' }
     }
     return { ok: true }
-  }
-
-  isAdmin(e) {
-    return e.isMaster || (e.member?.role === 'admin' || e.member?.role === 'owner')
   }
 
   formatSize(bytes) {
@@ -175,6 +160,8 @@ export class ProfileImageManager extends plugin {
     return { charCount, totalSize }
   }
 
+  // ==================== 安装图库 ====================
+
   async installGallery(repoUrl, targetDir, label, updateCmd) {
     if (fs.existsSync(targetDir) && fs.existsSync(path.join(targetDir, '.git'))) {
       return `[面板图图库管理器] ${label}已安装，请使用 ${updateCmd} 进行更新`
@@ -195,7 +182,19 @@ export class ProfileImageManager extends plugin {
     }
   }
 
-  // ========== 核心功能 ==========
+  async downloadMain(e) {
+    e.reply('[面板图图库管理器] 开始安装主图库，请稍候...')
+    const result = await this.installGallery(MAIN_REPO_URL, GIT_WORK_DIR, '主图库', '#更新图库')
+    return e.reply(result)
+  }
+
+  async downloadBlocked(e) {
+    e.reply('[面板图图库管理器] 开始安装屏蔽图库，请稍候...')
+    const result = await this.installGallery(BLOCKED_REPO_URL, GALLERY_PATH, '屏蔽图库', '#更新屏蔽图库')
+    return e.reply(result)
+  }
+
+  // ==================== 自动更新 ====================
 
   async autoCheck() {
     const check = this.checkGallery()
@@ -242,7 +241,8 @@ export class ProfileImageManager extends plugin {
     }
   }
 
-  /** #主图库状态 */
+  // ==================== 图库状态查询 ====================
+
   async status(e) {
     const check = this.checkGallery()
     if (!check.ok) return e.reply(check.msg)
@@ -262,7 +262,6 @@ export class ProfileImageManager extends plugin {
     return e.reply(msg)
   }
 
-  /** #屏蔽图库状态 */
   async blockedStatus(e) {
     const check = this.checkBlockedGallery()
     if (!check.ok) return e.reply(check.msg)
@@ -280,7 +279,6 @@ export class ProfileImageManager extends plugin {
     return e.reply(msg)
   }
 
-  /** #图库状态（总览） */
   async overallStatus(e) {
     const mainCheck = this.checkGallery()
     const blockedCheck = this.checkBlockedGallery()
@@ -298,11 +296,11 @@ export class ProfileImageManager extends plugin {
       msg += '\n主图库：未安装\n'
     }
     if (blockedCheck.ok) {
-      const { charCount: blockedChars, totalSize: blockedSize } = this.getBlockedInfo()
+      const { charCount, totalSize } = this.getBlockedInfo()
       const blockedVer = this.getLocalVersionAt(GALLERY_PATH)
       msg += '\n屏蔽图库：\n'
-      msg += '  屏蔽角色数：' + blockedChars + '\n'
-      msg += '  大小：' + this.formatSize(blockedSize) + '\n'
+      msg += '  屏蔽角色数：' + charCount + '\n'
+      msg += '  大小：' + this.formatSize(totalSize) + '\n'
       msg += blockedVer ? '  版本：' + blockedVer.sha + '\n' : '  版本：未知\n'
     } else {
       msg += '\n屏蔽图库：未安装\n'
@@ -310,120 +308,17 @@ export class ProfileImageManager extends plugin {
     return e.reply(msg)
   }
 
-  /** #下载主图库 */
-  async downloadMain(e) {
-    e.reply('[面板图图库管理器] 开始安装主图库，请稍候...')
-    const result = await this.installGallery(MAIN_REPO_URL, GIT_WORK_DIR, '主图库', '#更新图库')
-    return e.reply(result)
-  }
-
-  /** #下载屏蔽图库 */
-  async downloadBlocked(e) {
-    e.reply('[面板图图库管理器] 开始安装屏蔽图库，请稍候...')
-    const result = await this.installGallery(BLOCKED_REPO_URL, GALLERY_PATH, '屏蔽图库', '#更新屏蔽图库')
-    return e.reply(result)
-  }
-
-  /** #角色面板图屏蔽列表 */
-  async blockedImgList(e) {
-    const roleName = e.msg.replace(/^#/, '').replace(/面板图屏蔽列表$/, '').trim()
-    if (!roleName) return e.reply('[面板图图库管理器] 请输入正确的角色名，例如：#刻晴面板图屏蔽列表')
-    const blockedDir = path.join(GALLERY_PATH, roleName, '屏蔽')
-    if (!fs.existsSync(blockedDir)) return e.reply(`[面板图图库管理器] 角色「${roleName}」暂无屏蔽面板图`)
-    const imgFiles = fs.readdirSync(blockedDir).filter(file => /\.(webp|png|jpg|jpeg|gif)$/i.test(file))
-    if (imgFiles.length === 0) return e.reply(`[面板图图库管理器] 角色「${roleName}」的屏蔽文件夹为空`)
-    const msgList = []
-    msgList.push({ message: [`角色「${roleName}」的屏蔽面板图，共 ${imgFiles.length} 张`] })
-    imgFiles.forEach((file, idx) => {
-      const imgPath = path.join(blockedDir, file)
-      msgList.push({ message: [`${idx + 1}.`, segment.image(`file://${imgPath}`)] })
-    })
-    const forwardMsg = e.group?.makeForwardMsg
-      ? await e.group.makeForwardMsg(msgList)
-      : e.friend?.makeForwardMsg
-        ? await e.friend.makeForwardMsg(msgList)
-        : await Bot.makeForwardMsg(msgList)
-    const sendRes = await e.reply(forwardMsg)
-    if (!sendRes) e.reply('[面板图图库管理器] 消息发送失败，可能是风控，请稍后重试')
-    return true
-  }
-
-  /** #角色面板图屏蔽添加 */
-  async blockedImgAdd(e) {
-    if (!this.isAdmin(e)) return e.reply('[面板图图库管理器] 仅管理员可添加屏蔽面板图')
-    const roleName = e.msg.replace(/^#/, '').replace(/面板图屏蔽添加$/, '').trim()
-    if (!roleName) return e.reply('[面板图图库管理器] 指令格式错误，请使用 #角色名面板图屏蔽添加')
-    const imgSegments = e.message.filter(msg => msg.type === 'image')
-    if (imgSegments.length === 0) {
-      const reply = await e.getReply?.()
-      if (reply) {
-        reply.message.forEach(msg => {
-          if (msg.type === 'image') imgSegments.push(msg)
-        })
-      }
-    }
-    if (imgSegments.length === 0) return e.reply('[面板图图库管理器] 请同时发送图片，或引用一条图片消息')
-    const blockedDir = path.join(GALLERY_PATH, roleName, '屏蔽')
-    if (!fs.existsSync(blockedDir)) fs.mkdirSync(blockedDir, { recursive: true })
-    let added = 0
-    for (const img of imgSegments) {
-      try {
-        const response = await fetch(img.url)
-        if (!response.ok) continue
-        const buffer = Buffer.from(await response.arrayBuffer())
-        let ext = '.webp'
-        const contentType = response.headers.get('content-type') || ''
-        if (contentType.includes('image/gif')) ext = '.gif'
-        else if (contentType.includes('image/png')) ext = '.png'
-        else if (contentType.includes('image/jpeg')) ext = '.jpg'
-        let fileName = img.file?.substring(0, img.file.lastIndexOf('.')) || Date.now().toString()
-        fileName = fileName.replace(/[\\/:*?"<>|]/g, '_') + ext
-        let filePath = path.join(blockedDir, fileName)
-        let counter = 1
-        while (fs.existsSync(filePath)) {
-          const nameWithoutExt = fileName.substring(0, fileName.lastIndexOf('.'))
-          filePath = path.join(blockedDir, `${nameWithoutExt}_${counter}${ext}`)
-          counter++
-        }
-        fs.writeFileSync(filePath, buffer)
-        added++
-      } catch (e) {
-        logger.error(`[面板图图库管理器] 添加屏蔽图失败: ${e.message}`)
-      }
-    }
-    return e.reply(`[面板图图库管理器] 已为 ${roleName} 添加 ${added} 张屏蔽面板图`)
-  }
-
-  /** #角色面板图屏蔽删除 */
-  async blockedImgDelete(e) {
-    if (!this.isAdmin(e)) return e.reply('[面板图图库管理器] 仅管理员可删除屏蔽面板图')
-    const rawMsg = e.msg.replace(/^#/, '')
-    const match = rawMsg.match(/^(.+)面板图屏蔽删除\s*(\d*)$/)
-    if (!match) return e.reply('[面板图图库管理器] 指令格式错误，请使用 #角色名面板图屏蔽删除 序号')
-    const roleName = match[1].trim()
-    const idx = parseInt(match[2]) || 1
-    const blockedDir = path.join(GALLERY_PATH, roleName, '屏蔽')
-    if (!fs.existsSync(blockedDir)) return e.reply(`[面板图图库管理器] 角色「${roleName}」暂无屏蔽面板图`)
-    const files = fs.readdirSync(blockedDir).filter(f => /\.(webp|png|jpg|jpeg|gif)$/i.test(f))
-    if (files.length === 0) return e.reply(`[面板图图库管理器] 角色「${roleName}」暂无屏蔽面板图`)
-    if (idx < 1 || idx > files.length) return e.reply(`[面板图图库管理器] 序号无效，当前有 ${files.length} 张图`)
-    const targetFile = files[idx - 1]
-    fs.unlinkSync(path.join(blockedDir, targetFile))
-    return e.reply(`[面板图图库管理器] 已删除「${roleName}」的第 ${idx} 张屏蔽图 (${targetFile})`)
-  }
+  // ==================== 主图库更新 ====================
 
   async update(e) {
     const check = this.checkGallery()
     if (!check.ok) return e.reply(check.msg)
     try {
       const result = this.gitExec('git pull', 30000)
-      const output = result || 'Already up to date.'
-      return e.reply('[面板图图库管理器] 图库更新成功\n' + output)
+      return e.reply('[面板图图库管理器] 图库更新成功\n' + (result || 'Already up to date.'))
     } catch (err) {
       const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
-      let msg = '[面板图图库管理器] 图库自动更新失败，请尝试使用 #强制更新图库\n'
-      msg += '错误信息：' + errorMsg
-      return e.reply(msg)
+      return e.reply('[面板图图库管理器] 图库自动更新失败，请尝试使用 #强制更新图库\n错误信息：' + errorMsg)
     }
   }
 
@@ -438,5 +333,87 @@ export class ProfileImageManager extends plugin {
       const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
       return e.reply('[面板图图库管理器] 强制更新失败\n' + errorMsg + '\n请检查网络或手动执行安装命令')
     }
+  }
+
+  // ==================== 屏蔽面板图操作 ====================
+
+  async blockedImgList(e) {
+    const roleName = e.msg.replace(/^#/, '').replace(/面板图屏蔽列表$/, '').trim()
+    if (!roleName) return e.reply('[面板图图库管理器]\n请输入正确的角色名')
+    const blockedDir = path.join(GALLERY_PATH, roleName, '屏蔽')
+    if (!fs.existsSync(blockedDir)) return e.reply(`[面板图图库管理器]\n角色「${roleName}」暂无屏蔽面板图`)
+    const imgFiles = fs.readdirSync(blockedDir).filter(file => /\.(webp|png|jpg|jpeg|gif)$/i.test(file))
+    if (imgFiles.length === 0) return e.reply(`[面板图图库管理器]\n角色「${roleName}」的屏蔽文件夹为空`)
+    const msgList = []
+    msgList.push({ message: [`当前查看的是${roleName}面板图,共${imgFiles.length}张，可输入【#删除${roleName}面板图(序列号)】进行删除，可输入【#启用${roleName}面板图(序列号)】进行恢复`] })
+    imgFiles.forEach((file, idx) => {
+      const imgPath = path.join(blockedDir, file)
+      msgList.push({ message: [`${idx + 1}.`, segment.image(`file://${imgPath}`)] })
+    })
+    const forwardMsg = e.group?.makeForwardMsg
+      ? await e.group.makeForwardMsg(msgList)
+      : e.friend?.makeForwardMsg
+        ? await e.friend.makeForwardMsg(msgList)
+        : await Bot.makeForwardMsg(msgList)
+    const sendRes = await e.reply(forwardMsg)
+    if (!sendRes) e.reply('[面板图图库管理器]\n消息发送失败，可能是风控，请稍后重试')
+    return true
+  }
+
+  async blockImg(e) {
+    const rawMsg = e.msg.replace(/^#/, '')
+    const match = rawMsg.match(/^屏蔽(.+)面板图\s*(\d*)$/)
+    if (!match) return e.reply('[面板图图库管理器]指令格式错误，请使用 #屏蔽角色名面板图 序号')
+    const roleName = match[1].trim()
+    const idx = parseInt(match[2]) || 1
+    const mainDir = path.join(GALLERY_PATH, roleName)
+    if (!fs.existsSync(mainDir)) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无面板图`)
+    const mainFiles = fs.readdirSync(mainDir).filter(f => {
+      const fullPath = path.join(mainDir, f)
+      return /\.(webp|png|jpg|jpeg|gif)$/i.test(f) && fs.statSync(fullPath).isFile()
+    })
+    if (mainFiles.length === 0) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无面板图`)
+    if (idx < 1 || idx > mainFiles.length) return e.reply(`[面板图图库管理器]\n序号无效，当前有${mainFiles.length}张图`)
+    const srcFile = path.join(mainDir, mainFiles[idx - 1])
+    const blockedDir = path.join(mainDir, '屏蔽')
+    if (!fs.existsSync(blockedDir)) fs.mkdirSync(blockedDir, { recursive: true })
+    let destFile = path.join(blockedDir, mainFiles[idx - 1])
+    if (fs.existsSync(destFile)) {
+      const ext = path.extname(mainFiles[idx - 1])
+      const base = path.basename(mainFiles[idx - 1], ext)
+      let counter = 1
+      while (fs.existsSync(path.join(blockedDir, `${base}_${counter}${ext}`))) counter++
+      destFile = path.join(blockedDir, `${base}_${counter}${ext}`)
+    }
+    fs.renameSync(srcFile, destFile)
+    return e.reply(`[面板图图库管理器]\n已将${roleName}的第${idx}张图移入屏蔽图库(${path.basename(destFile)})`)
+  }
+
+  async unblockImg(e) {
+    const rawMsg = e.msg.replace(/^#/, '')
+    const match = rawMsg.match(/^启用(.+?)(屏蔽)?面板图\s*(\d*)$/)
+    if (!match) return e.reply('[面板图图库管理器]指令格式错误，请使用 #启用角色名面板图 序号')
+    const roleName = match[1].trim()
+    const idx = parseInt(match[2]) || 1
+    const blockedDir = path.join(GALLERY_PATH, roleName, '屏蔽')
+    if (!fs.existsSync(blockedDir)) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无屏蔽面板图`)
+    const blockedFiles = fs.readdirSync(blockedDir).filter(f => {
+      const fullPath = path.join(blockedDir, f)
+      return /\.(webp|png|jpg|jpeg|gif)$/i.test(f) && fs.statSync(fullPath).isFile()
+    })
+    if (blockedFiles.length === 0) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无屏蔽面板图`)
+    if (idx < 1 || idx > blockedFiles.length) return e.reply(`[面板图图库管理器]\n序号无效，当前有${blockedFiles.length}张屏蔽图`)
+    const srcFile = path.join(blockedDir, blockedFiles[idx - 1])
+    const mainDir = path.join(GALLERY_PATH, roleName)
+    let destFile = path.join(mainDir, blockedFiles[idx - 1])
+    if (fs.existsSync(destFile)) {
+      const ext = path.extname(blockedFiles[idx - 1])
+      const base = path.basename(blockedFiles[idx - 1], ext)
+      let counter = 1
+      while (fs.existsSync(path.join(mainDir, `${base}_${counter}${ext}`))) counter++
+      destFile = path.join(mainDir, `${base}_${counter}${ext}`)
+    }
+    fs.renameSync(srcFile, destFile)
+    return e.reply(`[面板图图库管理器]\n已将${roleName}的第${idx}张屏蔽图移回主图库(${path.basename(destFile)})`)
   }
 }
