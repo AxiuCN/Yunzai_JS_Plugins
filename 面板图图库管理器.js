@@ -6,8 +6,9 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 
 const GALLERY_PATH = path.join(process.cwd(), 'plugins/miao-plugin/resources/profile/normal-character')
+const BLOCKED_GALLERY_PATH = path.join(process.cwd(), 'plugins/miao-plugin/resources/profile/blocked-character')
 const GIT_WORK_DIR = path.join(process.cwd(), 'plugins/miao-plugin/resources/profile')
-const BLOCKED_GIT_DIR = path.join(GALLERY_PATH, '.git')
+const BLOCKED_GIT_DIR = path.join(BLOCKED_GALLERY_PATH, '.git')
 const MAIN_REPO_URL = 'https://github.com/AxiuCN/miao-plugin-ProfileImg.git'
 const BLOCKED_REPO_URL = 'https://github.com/AxiuCN/miao-plugin-ProfileImg-Blocked.git'
 
@@ -32,7 +33,7 @@ export class ProfileImageManager extends plugin {
         { reg: '^#(.+)面板图屏蔽列表$', fnc: 'blockedImgList' },
         // 面板图迁移
         { reg: '^#屏蔽(.+)面板图\\s*(\\d*)$', fnc: 'blockImg', permission: 'master' },
-        { reg: '^#启用(.+)(屏蔽)?面板图\\s*(\\d*)$', fnc: 'unblockImg', permission: 'master' }
+        { reg: '^#启用(.+?)(屏蔽)?面板图\\s*(\\d*)$', fnc: 'unblockImg', permission: 'master' }
       ]
     })
 
@@ -74,13 +75,13 @@ export class ProfileImageManager extends plugin {
   }
 
   checkBlockedGallery() {
-    if (!fs.existsSync(GALLERY_PATH)) {
-      return { ok: false, msg: '[面板图图库管理器] 图库目录不存在' }
-    }
-    if (!fs.existsSync(BLOCKED_GIT_DIR)) {
-      return { ok: false, msg: '[面板图图库管理器] 屏蔽图库未初始化 Git，请先安装屏蔽图库' }
-    }
-    return { ok: true }
+      if (!fs.existsSync(BLOCKED_GALLERY_PATH)) {
+          return { ok: false, msg: '[面板图图库管理器] 屏蔽图库目录不存在，请先安装屏蔽图库' }
+      }
+      if (!fs.existsSync(BLOCKED_GIT_DIR)) {
+          return { ok: false, msg: '[面板图图库管理器] 屏蔽图库未初始化 Git，请重新安装屏蔽图库' }
+      }
+      return { ok: true }
   }
 
   formatSize(bytes) {
@@ -102,6 +103,20 @@ export class ProfileImageManager extends plugin {
       }
     })
     return size
+  }
+
+  countImages(dirPath) {
+    let count = 0
+    if (!fs.existsSync(dirPath)) return 0
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== '.git') {
+        count += this.countImages(path.join(dirPath, entry.name))
+      } else if (/\.(webp|png|jpg|jpeg|gif)$/i.test(entry.name)) {
+        count++
+      }
+    }
+    return count
   }
 
   getLocalVersion() {
@@ -144,20 +159,30 @@ export class ProfileImageManager extends plugin {
   }
 
   getBlockedInfo() {
-    let charCount = 0
-    let totalSize = 0
-    const charDirs = fs.readdirSync(GALLERY_PATH, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== '.git')
-    for (const charDir of charDirs) {
-      const blockedDir = path.join(GALLERY_PATH, charDir.name, '屏蔽')
-      if (fs.existsSync(blockedDir) && fs.statSync(blockedDir).isDirectory()) {
-        const files = fs.readdirSync(blockedDir)
-        if (files.length > 0) {
+      let charCount = 0
+      let totalSize = 0
+      let imageCount = 0
+      if (!fs.existsSync(BLOCKED_GALLERY_PATH)) return { charCount, totalSize, imageCount }
+      const charDirs = fs.readdirSync(BLOCKED_GALLERY_PATH, { withFileTypes: true })
+          .filter(d => d.isDirectory() && d.name !== '.git')
+      for (const charDir of charDirs) {
+          const charPath = path.join(BLOCKED_GALLERY_PATH, charDir.name)
+          totalSize += this.getDirSize(charPath)
           charCount++
-          totalSize += this.getDirSize(blockedDir)
-        }
+          const files = fs.readdirSync(charPath, { withFileTypes: true })
+          imageCount += files.filter(f => f.isFile() && /\.(webp|png|jpg|jpeg|gif)$/i.test(f.name)).length
       }
-    }
-    return { charCount, totalSize }
+      return { charCount, totalSize, imageCount }
+  }
+
+  /** 获取指定角色的主图库路径 */
+  getMainDir(roleName) {
+    return path.join(GALLERY_PATH, roleName)
+  }
+
+  /** 获取指定角色的屏蔽图库路径 */
+  getBlockedDir(roleName) {
+    return path.join(BLOCKED_GALLERY_PATH, roleName)
   }
 
   // ==================== 安装图库 ====================
@@ -189,9 +214,24 @@ export class ProfileImageManager extends plugin {
   }
 
   async downloadBlocked(e) {
-    e.reply('[面板图图库管理器] 开始安装屏蔽图库，请稍候...')
-    const result = await this.installGallery(BLOCKED_REPO_URL, GALLERY_PATH, '屏蔽图库', '#更新屏蔽图库')
-    return e.reply(result)
+      e.reply('[面板图图库管理器] 开始安装屏蔽图库，请稍候...')
+      if (!fs.existsSync(path.join(GIT_WORK_DIR, '.git'))) {
+          return e.reply('[面板图图库管理器] 主图库未初始化 Git，请先安装主图库')
+      }
+      if (fs.existsSync(path.join(BLOCKED_GALLERY_PATH, '.git'))) {
+          return e.reply('[面板图图库管理器] 屏蔽图库已安装，请使用 #更新屏蔽图库 进行更新')
+      }
+      try {
+          execSync(`git submodule add ${BLOCKED_REPO_URL} blocked-character`, {
+              cwd: GIT_WORK_DIR,
+              encoding: 'utf8',
+              timeout: 30000
+          })
+          return e.reply('[面板图图库管理器] 屏蔽图库安装成功！')
+      } catch (err) {
+          const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
+          return e.reply('[面板图图库管理器] 屏蔽图库安装失败\n' + errorMsg)
+      }
   }
 
   // ==================== 自动更新 ====================
@@ -248,10 +288,12 @@ export class ProfileImageManager extends plugin {
     if (!check.ok) return e.reply(check.msg)
     const files = fs.readdirSync(GALLERY_PATH, { withFileTypes: true })
     const charCount = files.filter(f => f.isDirectory() && f.name !== '.git').length
+    const imageCount = this.countImages(GALLERY_PATH)
     const totalSize = this.getDirSize(GALLERY_PATH)
     const version = this.getLocalVersion()
     let msg = '[面板图图库管理器] 主图库\n'
     msg += '角色数：' + charCount + '\n'
+    msg += '图片数：' + imageCount + '\n'
     msg += '总大小：' + this.formatSize(totalSize) + '\n'
     if (version) {
       msg += '版本：' + version.sha + '\n'
@@ -265,10 +307,11 @@ export class ProfileImageManager extends plugin {
   async blockedStatus(e) {
     const check = this.checkBlockedGallery()
     if (!check.ok) return e.reply(check.msg)
-    const { charCount, totalSize } = this.getBlockedInfo()
-    const version = this.getLocalVersionAt(GALLERY_PATH)
+    const { charCount, totalSize, imageCount } = this.getBlockedInfo()
+    const version = this.getLocalVersionAt(BLOCKED_GALLERY_PATH)
     let msg = '[面板图图库管理器] 屏蔽图库\n'
     msg += '屏蔽角色数：' + charCount + '\n'
+    msg += '屏蔽图片数：' + imageCount + '\n'
     msg += '总大小：' + this.formatSize(totalSize) + '\n'
     if (version) {
       msg += '版本：' + version.sha + '\n'
@@ -286,20 +329,23 @@ export class ProfileImageManager extends plugin {
     if (mainCheck.ok) {
       const files = fs.readdirSync(GALLERY_PATH, { withFileTypes: true })
       const mainCharCount = files.filter(f => f.isDirectory() && f.name !== '.git').length
+      const imageCount = this.countImages(GALLERY_PATH)
       const mainSize = this.getDirSize(GALLERY_PATH)
       const mainVer = this.getLocalVersion()
       msg += '\n主图库：\n'
       msg += '  角色数：' + mainCharCount + '\n'
+      msg += '  图片数：' + imageCount + '\n'
       msg += '  大小：' + this.formatSize(mainSize) + '\n'
       msg += mainVer ? '  版本：' + mainVer.sha + '\n' : '  版本：未知\n'
     } else {
       msg += '\n主图库：未安装\n'
     }
     if (blockedCheck.ok) {
-      const { charCount, totalSize } = this.getBlockedInfo()
-      const blockedVer = this.getLocalVersionAt(GALLERY_PATH)
+      const { charCount, totalSize, imageCount } = this.getBlockedInfo()
+      const blockedVer = this.getLocalVersionAt(BLOCKED_GALLERY_PATH)
       msg += '\n屏蔽图库：\n'
       msg += '  屏蔽角色数：' + charCount + '\n'
+      msg += '  屏蔽图片数：' + imageCount + '\n'
       msg += '  大小：' + this.formatSize(totalSize) + '\n'
       msg += blockedVer ? '  版本：' + blockedVer.sha + '\n' : '  版本：未知\n'
     } else {
@@ -340,7 +386,7 @@ export class ProfileImageManager extends plugin {
   async blockedImgList(e) {
     const roleName = e.msg.replace(/^#/, '').replace(/面板图屏蔽列表$/, '').trim()
     if (!roleName) return e.reply('[面板图图库管理器]\n请输入正确的角色名')
-    const blockedDir = path.join(GALLERY_PATH, roleName, '屏蔽')
+    const blockedDir = this.getBlockedDir(roleName)
     if (!fs.existsSync(blockedDir)) return e.reply(`[面板图图库管理器]\n角色「${roleName}」暂无屏蔽面板图`)
     const imgFiles = fs.readdirSync(blockedDir).filter(file => /\.(webp|png|jpg|jpeg|gif)$/i.test(file))
     if (imgFiles.length === 0) return e.reply(`[面板图图库管理器]\n角色「${roleName}」的屏蔽文件夹为空`)
@@ -366,7 +412,8 @@ export class ProfileImageManager extends plugin {
     if (!match) return e.reply('[面板图图库管理器]指令格式错误，请使用 #屏蔽角色名面板图 序号')
     const roleName = match[1].trim()
     const idx = parseInt(match[2]) || 1
-    const mainDir = path.join(GALLERY_PATH, roleName)
+    const mainDir = this.getMainDir(roleName)
+    const blockedDir = this.getBlockedDir(roleName)
     if (!fs.existsSync(mainDir)) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无面板图`)
     const mainFiles = fs.readdirSync(mainDir).filter(f => {
       const fullPath = path.join(mainDir, f)
@@ -375,7 +422,6 @@ export class ProfileImageManager extends plugin {
     if (mainFiles.length === 0) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无面板图`)
     if (idx < 1 || idx > mainFiles.length) return e.reply(`[面板图图库管理器]\n序号无效，当前有${mainFiles.length}张图`)
     const srcFile = path.join(mainDir, mainFiles[idx - 1])
-    const blockedDir = path.join(mainDir, '屏蔽')
     if (!fs.existsSync(blockedDir)) fs.mkdirSync(blockedDir, { recursive: true })
     let destFile = path.join(blockedDir, mainFiles[idx - 1])
     if (fs.existsSync(destFile)) {
@@ -394,8 +440,9 @@ export class ProfileImageManager extends plugin {
     const match = rawMsg.match(/^启用(.+?)(屏蔽)?面板图\s*(\d*)$/)
     if (!match) return e.reply('[面板图图库管理器]指令格式错误，请使用 #启用角色名面板图 序号')
     const roleName = match[1].trim()
-    const idx = parseInt(match[2]) || 1
-    const blockedDir = path.join(GALLERY_PATH, roleName, '屏蔽')
+    const idx = parseInt(match[3]) || 1
+    const blockedDir = this.getBlockedDir(roleName)
+    const mainDir = this.getMainDir(roleName)
     if (!fs.existsSync(blockedDir)) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无屏蔽面板图`)
     const blockedFiles = fs.readdirSync(blockedDir).filter(f => {
       const fullPath = path.join(blockedDir, f)
@@ -404,7 +451,6 @@ export class ProfileImageManager extends plugin {
     if (blockedFiles.length === 0) return e.reply(`[面板图图库管理器]\n角色${roleName}暂无屏蔽面板图`)
     if (idx < 1 || idx > blockedFiles.length) return e.reply(`[面板图图库管理器]\n序号无效，当前有${blockedFiles.length}张屏蔽图`)
     const srcFile = path.join(blockedDir, blockedFiles[idx - 1])
-    const mainDir = path.join(GALLERY_PATH, roleName)
     let destFile = path.join(mainDir, blockedFiles[idx - 1])
     if (fs.existsSync(destFile)) {
       const ext = path.extname(blockedFiles[idx - 1])
