@@ -1,6 +1,8 @@
 // 插件作者 阿修Axiu
 // 开源地址 https://github.com/AxiuCN/Yunzai_JS_Plugins
 // plugins/example/面板图图库管理器.js
+// 仅保留核心管理功能（状态查询、面板图迁移），移除所有更新与配置部分
+// 完整版 https://github.com/AxiuCN/ProfileImg-Plugin
 import fs from 'node:fs'
 import path from 'node:path'
 import { execSync } from 'node:child_process'
@@ -12,6 +14,53 @@ const BLOCKED_GIT_DIR = path.join(BLOCKED_GALLERY_PATH, '.git')
 const MAIN_REPO_URL = 'https://github.com/AxiuCN/miao-plugin-ProfileImg.git'
 const BLOCKED_REPO_URL = 'https://github.com/AxiuCN/miao-plugin-ProfileImg-Blocked.git'
 
+// ========================= 别名解析 =========================
+let ALIAS_MAP = new Map()
+function buildAliasMap() {
+  const aliasFiles = [
+    path.join(process.cwd(), 'plugins/miao-plugin/resources/meta-gs/character/alias.js'),
+    path.join(process.cwd(), 'plugins/miao-plugin/resources/meta-sr/character/alias.js')
+  ]
+  for (const file of aliasFiles) {
+    if (!fs.existsSync(file)) continue
+    try {
+      const content = fs.readFileSync(file, 'utf8')
+      const match = content.match(/export const alias = \{([^}]+)\}/s)
+      if (!match) continue
+      const aliasBlock = match[1]
+      const lines = aliasBlock.split('\n')
+      for (const line of lines) {
+        const kv = line.match(/^\s*'?(.+?)'?\s*:\s*'([^']+)',?\s*$/)
+        if (!kv) continue
+        const officialName = kv[1].trim()
+        const aliasStr = kv[2].trim()
+        ALIAS_MAP.set(officialName.toLowerCase(), officialName)
+        for (const alias of aliasStr.split(',')) {
+          ALIAS_MAP.set(alias.trim().toLowerCase(), officialName)
+        }
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+}
+buildAliasMap()
+
+function resolveRoleName(input) {
+  const charDir = path.join(GALLERY_PATH, input)
+  if (fs.existsSync(charDir)) return input
+  const lowerInput = input.toLowerCase()
+  if (ALIAS_MAP.has(lowerInput)) return ALIAS_MAP.get(lowerInput)
+  try {
+    const charDirs = fs.readdirSync(GALLERY_PATH, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== '.git')
+      .map(d => d.name)
+    const caseMatch = charDirs.find(dir => dir.toLowerCase() === lowerInput)
+    if (caseMatch) return caseMatch
+    const partialMatches = charDirs.filter(dir => dir.includes(input))
+    if (partialMatches.length === 1) return partialMatches[0]
+  } catch (e) {}
+  return input
+}
+
 export class ProfileImageManager extends plugin {
   constructor() {
     super({
@@ -20,38 +69,16 @@ export class ProfileImageManager extends plugin {
       event: 'message',
       priority: 500,
       rule: [
-        // 图库总览
         { reg: '^#图库状态$', fnc: 'overallStatus' },
-        // 主图库
         { reg: '^#主图库状态$', fnc: 'status' },
-        { reg: '^#更新图库$', fnc: 'update', permission: 'master' },
-        { reg: '^#强制更新图库$', fnc: 'forceUpdate', permission: 'master' },
-        { reg: '^#下载主图库$', fnc: 'downloadMain', permission: 'master' },
-        // 屏蔽图库
         { reg: '^#屏蔽图库状态$', fnc: 'blockedStatus' },
-        { reg: '^#下载屏蔽图库$', fnc: 'downloadBlocked', permission: 'master' },
         { reg: '^#(.+)面板图屏蔽列表$', fnc: 'blockedImgList' },
-        // 面板图迁移
         { reg: '^#屏蔽(.+)面板图\\s*(\\d*)$', fnc: 'blockImg', permission: 'master' },
-        { reg: '^#启用(.+?)(屏蔽)?面板图\\s*(\\d*)$', fnc: 'unblockImg', permission: 'master' }
+        { reg: '^#启用(.+?)(屏蔽)?面板图\\s*(\\d*)$', fnc: 'unblockImg', permission: 'master' },
+        { reg: '^#下载主图库$', fnc: 'downloadMain', permission: 'master' },
+        { reg: '^#下载屏蔽图库$', fnc: 'downloadBlocked', permission: 'master' }
       ]
     })
-
-    // 定时任务
-    this.task = [
-      {
-        name: '主图库自动检查更新',
-        cron: '0 30 6 * * *',
-        fnc: () => this.autoCheck(),
-        log: true
-      },
-      {
-        name: '管理器自身自动更新',
-        cron: '50 5 * * *',
-        fnc: () => this.selfUpdate(),
-        log: false
-      }
-    ]
   }
 
   // ==================== 工具方法 ====================
@@ -75,13 +102,13 @@ export class ProfileImageManager extends plugin {
   }
 
   checkBlockedGallery() {
-      if (!fs.existsSync(BLOCKED_GALLERY_PATH)) {
-          return { ok: false, msg: '[面板图图库管理器] 屏蔽图库目录不存在，请先安装屏蔽图库' }
-      }
-      if (!fs.existsSync(BLOCKED_GIT_DIR)) {
-          return { ok: false, msg: '[面板图图库管理器] 屏蔽图库未初始化 Git，请重新安装屏蔽图库' }
-      }
-      return { ok: true }
+    if (!fs.existsSync(BLOCKED_GALLERY_PATH)) {
+      return { ok: false, msg: '[面板图图库管理器] 屏蔽图库目录不存在，请先安装屏蔽图库' }
+    }
+    if (!fs.existsSync(BLOCKED_GIT_DIR)) {
+      return { ok: false, msg: '[面板图图库管理器] 屏蔽图库未初始化 Git，请重新安装屏蔽图库' }
+    }
+    return { ok: true }
   }
 
   formatSize(bytes) {
@@ -124,9 +151,7 @@ export class ProfileImageManager extends plugin {
       const sha = this.gitExec('git rev-parse --short HEAD')
       const date = this.gitExec('git log -1 --format=%ci')
       return { sha, date }
-    } catch (e) {
-      return null
-    }
+    } catch (e) { return null }
   }
 
   getLocalVersionAt(dir) {
@@ -134,58 +159,33 @@ export class ProfileImageManager extends plugin {
       const sha = this.gitExecAt(dir, 'git rev-parse --short HEAD')
       const date = this.gitExecAt(dir, 'git log -1 --format=%ci')
       return { sha, date }
-    } catch (e) {
-      return null
-    }
-  }
-
-  getRemoteSha() {
-    try {
-      this.gitExec('git fetch origin main', 30000)
-      return this.gitExec('git rev-parse --short origin/main')
-    } catch (e) {
-      return null
-    }
-  }
-
-  forceResetToRemote() {
-    this.gitExec('git reset --hard origin/main', 30000)
-  }
-
-  notifyMaster(msg) {
-    if (Bot.masterQQ && Bot.masterQQ.length > 0) {
-      Bot.masterQQ.forEach(qq => Bot.pickFriend(qq).sendMsg(msg))
-    }
+    } catch (e) { return null }
   }
 
   getBlockedInfo() {
-      let charCount = 0
-      let totalSize = 0
-      let imageCount = 0
-      if (!fs.existsSync(BLOCKED_GALLERY_PATH)) return { charCount, totalSize, imageCount }
-      const charDirs = fs.readdirSync(BLOCKED_GALLERY_PATH, { withFileTypes: true })
-          .filter(d => d.isDirectory() && d.name !== '.git')
-      for (const charDir of charDirs) {
-          const charPath = path.join(BLOCKED_GALLERY_PATH, charDir.name)
-          totalSize += this.getDirSize(charPath)
-          charCount++
-          const files = fs.readdirSync(charPath, { withFileTypes: true })
-          imageCount += files.filter(f => f.isFile() && /\.(webp|png|jpg|jpeg|gif)$/i.test(f.name)).length
-      }
-      return { charCount, totalSize, imageCount }
+    let charCount = 0, totalSize = 0, imageCount = 0
+    if (!fs.existsSync(BLOCKED_GALLERY_PATH)) return { charCount, totalSize, imageCount }
+    const charDirs = fs.readdirSync(BLOCKED_GALLERY_PATH, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== '.git')
+    for (const charDir of charDirs) {
+      const charPath = path.join(BLOCKED_GALLERY_PATH, charDir.name)
+      totalSize += this.getDirSize(charPath)
+      charCount++
+      const files = fs.readdirSync(charPath, { withFileTypes: true })
+      imageCount += files.filter(f => f.isFile() && /\.(webp|png|jpg|jpeg|gif)$/i.test(f.name)).length
+    }
+    return { charCount, totalSize, imageCount }
   }
 
-  /** 获取指定角色的主图库路径 */
   getMainDir(roleName) {
     return path.join(GALLERY_PATH, roleName)
   }
 
-  /** 获取指定角色的屏蔽图库路径 */
   getBlockedDir(roleName) {
     return path.join(BLOCKED_GALLERY_PATH, roleName)
   }
 
-  // ==================== 安装图库 ====================
+  // ==================== 图库安装 ====================
 
   async installGallery(repoUrl, targetDir, label, updateCmd) {
     if (fs.existsSync(targetDir) && fs.existsSync(path.join(targetDir, '.git'))) {
@@ -209,75 +209,28 @@ export class ProfileImageManager extends plugin {
 
   async downloadMain(e) {
     e.reply('[面板图图库管理器] 开始安装主图库，请稍候...')
-    const result = await this.installGallery(MAIN_REPO_URL, GIT_WORK_DIR, '主图库', '#更新图库')
+    const result = await this.installGallery(MAIN_REPO_URL, GIT_WORK_DIR, '主图库', '#主图库更新')
     return e.reply(result)
   }
 
   async downloadBlocked(e) {
-      e.reply('[面板图图库管理器] 开始安装屏蔽图库，请稍候...')
-      if (!fs.existsSync(path.join(GIT_WORK_DIR, '.git'))) {
-          return e.reply('[面板图图库管理器] 主图库未初始化 Git，请先安装主图库')
-      }
-      if (fs.existsSync(path.join(BLOCKED_GALLERY_PATH, '.git'))) {
-          return e.reply('[面板图图库管理器] 屏蔽图库已安装，请使用 #更新屏蔽图库 进行更新')
-      }
-      try {
-          execSync(`git submodule add ${BLOCKED_REPO_URL} blocked-character`, {
-              cwd: GIT_WORK_DIR,
-              encoding: 'utf8',
-              timeout: 30000
-          })
-          return e.reply('[面板图图库管理器] 屏蔽图库安装成功！')
-      } catch (err) {
-          const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
-          return e.reply('[面板图图库管理器] 屏蔽图库安装失败\n' + errorMsg)
-      }
-  }
-
-  // ==================== 自动更新 ====================
-
-  async autoCheck() {
-    const check = this.checkGallery()
-    if (!check.ok) return
-    try {
-      const remoteSha = this.getRemoteSha()
-      if (!remoteSha) return
-      const localSha = this.gitExec('git rev-parse --short HEAD')
-      if (remoteSha === localSha) return
-      try {
-        this.gitExec('git pull origin main --allow-unrelated-histories', 30000)
-        const msg = '[面板图图库管理器] 自动更新成功\n' + localSha + ' -> ' + remoteSha
-        this.notifyMaster(msg)
-        logger.info('[面板图图库管理器] 自动更新成功: ' + localSha + ' -> ' + remoteSha)
-      } catch (pullErr) {
-        const errorMsg = pullErr.stderr || pullErr.stdout || pullErr.message || '未知错误'
-        const msg = '[面板图图库管理器] 自动更新失败\n检测到新版本 ' + remoteSha + '\n错误信息：' + errorMsg + '\n请手动执行 #强制更新图库'
-        this.notifyMaster(msg)
-        logger.error('[面板图图库管理器] 自动更新失败:', pullErr)
-      }
-    } catch (err) {
-      logger.error('[面板图图库管理器] 自动检查更新失败:', err)
+    e.reply('[面板图图库管理器] 开始安装屏蔽图库，请稍候...')
+    if (!fs.existsSync(path.join(GIT_WORK_DIR, '.git'))) {
+      return e.reply('[面板图图库管理器] 主图库未初始化 Git，请先安装主图库')
     }
-  }
-
-  async selfUpdate() {
+    if (fs.existsSync(path.join(BLOCKED_GALLERY_PATH, '.git'))) {
+      return e.reply('[面板图图库管理器] 屏蔽图库已安装，请使用 #更新屏蔽图库 进行更新')
+    }
     try {
-      const remoteUrl = 'https://raw.githubusercontent.com/AxiuCN/Yunzai_JS_Plugins/main/%E9%9D%A2%E6%9D%BF%E5%9B%BE%E5%9B%BE%E5%BA%93%E7%AE%A1%E7%90%86%E5%99%A8.js'
-      const localPath = path.join(process.cwd(), 'plugins/example/面板图图库管理器.js')
-      const res = await fetch(remoteUrl)
-      if (!res.ok) throw new Error('下载失败，HTTP ' + res.status)
-      const remoteCode = await res.text()
-      const localCode = fs.readFileSync(localPath, 'utf8')
-      if (remoteCode.trim() === localCode.trim()) {
-        logger.info('[面板图图库管理器] 自身已是最新版本')
-        return
-      }
-      fs.writeFileSync(localPath, remoteCode, 'utf8')
-      this.notifyMaster('[面板图图库管理器] 自身已自动更新至最新版本')
-      logger.info('[面板图图库管理器] 自身更新成功')
+      execSync(`git clone --depth 1 ${BLOCKED_REPO_URL} "${BLOCKED_GALLERY_PATH}"`, {
+        cwd: GIT_WORK_DIR,
+        encoding: 'utf8',
+        timeout: 60000
+      })
+      return e.reply('[面板图图库管理器] 屏蔽图库安装成功！')
     } catch (err) {
-      logger.error('[面板图图库管理器] 自身更新失败:', err)
-      this.notifyMaster('[面板图图库管理器] 自身更新失败: ' + (err.message || '未知错误'))
+      const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
+      return e.reply('[面板图图库管理器] 屏蔽图库安装失败\n' + errorMsg)
     }
   }
 
@@ -354,33 +307,6 @@ export class ProfileImageManager extends plugin {
     return e.reply(msg)
   }
 
-  // ==================== 主图库更新 ====================
-
-  async update(e) {
-    const check = this.checkGallery()
-    if (!check.ok) return e.reply(check.msg)
-    try {
-      const result = this.gitExec('git pull', 30000)
-      return e.reply('[面板图图库管理器] 图库更新成功\n' + (result || 'Already up to date.'))
-    } catch (err) {
-      const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
-      return e.reply('[面板图图库管理器] 图库自动更新失败，请尝试使用 #强制更新图库\n错误信息：' + errorMsg)
-    }
-  }
-
-  async forceUpdate(e) {
-    const check = this.checkGallery()
-    if (!check.ok) return e.reply(check.msg)
-    try {
-      this.getRemoteSha()
-      this.forceResetToRemote()
-      return e.reply('[面板图图库管理器] 强制更新成功')
-    } catch (err) {
-      const errorMsg = err.stderr || err.stdout || err.message || '未知错误'
-      return e.reply('[面板图图库管理器] 强制更新失败\n' + errorMsg + '\n请检查网络或手动执行安装命令')
-    }
-  }
-
   // ==================== 屏蔽面板图操作 ====================
 
   async blockedImgList(e) {
@@ -410,7 +336,8 @@ export class ProfileImageManager extends plugin {
     const rawMsg = e.msg.replace(/^#/, '')
     const match = rawMsg.match(/^屏蔽(.+)面板图\s*(\d*)$/)
     if (!match) return e.reply('[面板图图库管理器]指令格式错误，请使用 #屏蔽角色名面板图 序号')
-    const roleName = match[1].trim()
+    let roleName = match[1].trim()
+    roleName = resolveRoleName(roleName)
     const idx = parseInt(match[2]) || 1
     const mainDir = this.getMainDir(roleName)
     const blockedDir = this.getBlockedDir(roleName)
@@ -439,7 +366,8 @@ export class ProfileImageManager extends plugin {
     const rawMsg = e.msg.replace(/^#/, '')
     const match = rawMsg.match(/^启用(.+?)(屏蔽)?面板图\s*(\d*)$/)
     if (!match) return e.reply('[面板图图库管理器]指令格式错误，请使用 #启用角色名面板图 序号')
-    const roleName = match[1].trim()
+    let roleName = match[1].trim()
+    roleName = resolveRoleName(roleName)
     const idx = parseInt(match[3]) || 1
     const blockedDir = this.getBlockedDir(roleName)
     const mainDir = this.getMainDir(roleName)
